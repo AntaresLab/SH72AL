@@ -4,7 +4,7 @@
  * @version	0.1
  * @date	19-February-2021
  *
- *  There is a firmware for the <a href="https://easyeda.com/AntaresLab/SH72">alternative SH72 soldering iron controller</a>
+ *  There is a firmware for the <a href="https://oshwlab.com/AntaresLab/SH72">alternative SH72 soldering iron controller</a>
  *  with turbo mode, two-stage sleep mode, grounding the soldering iron tip to a "-" power wire and the protection against
  *  the reverse polarity, short circuit and overvoltage. The firmware is designed for the ATtini13 MCU and works with the
  *  factory-setted fuse bits.
