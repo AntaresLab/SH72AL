@@ -1,15 +1,15 @@
 /*
  * @file	main.c
  * @author	<a href="https://github.com/AntaresLab">Sergey Starovoitov aka AntaresLab</a>
- * @version	0.1
- * @date	19-February-2021
+ * @version	0.2
+ * @date	22-February-2021
  *
- *  There is a firmware for the <a href="https://oshwlab.com/AntaresLab/SH72">alternative SH72 soldering iron controller</a>
- *  with turbo mode, two-stage sleep mode, grounding the soldering iron tip to a "-" power wire and the protection against
- *  the reverse polarity, short circuit and overvoltage. The firmware is designed for the ATtini13 MCU and works with the
- *  factory-setted fuse bits.
+ * There is a firmware for the <a href="https://oshwlab.com/AntaresLab/SH72">alternative SH72 soldering iron controller</a>
+ * with turbo mode, two-stage sleep mode, grounding the soldering iron tip to a "-" power wire and the protection against
+ * the reverse polarity, short circuit and overvoltage. The firmware is designed for the ATtini13 MCU and works with the
+ * factory-setted fuse bits.
  *
- *  @note	Should be compiled with -O1 optimization level.
+ * @note		Should be compiled with -O1 optimization level.
  */
 
 #include <avr/io.h>
@@ -17,33 +17,40 @@
 #include <avr/sleep.h>
 #include <stdint.h>
 
+#define TURBO_BUTTON_ANTI_GLITCH_COUNTER_THRESHOLD		10		///< Turbo button anti-glitch counter threshold, x10ms
+#define POSITION_SENSOR_ANTI_GLITCH_COUNTER_THRESHOLD	10		///< Position sensor anti-glitch counter threshold, x10ms
+#define SLEEP_MODE_THRESHOLD							30000	///< Sleep mode counter threshold, x10ms
+#define POWER_DOWN_MODE_THRESHOLD						60000	///< Power down mode counter threshold, x10ms
+
 /**
  * Set of the possible states
  */
 typedef enum{
-	NORMAL_MODE,	///< Normal mode
-	TURBO_MODE,		///< Maximal temperature mode
-	SLEEP_MODE,		///< Minimal temperature mode
-	POWER_DOWN_MODE	///< Heater off mode
+	NORMAL_MODE,				///< Normal mode
+	TURBO_MODE,					///< Maximal temperature mode
+	SLEEP_MODE,					///< Minimal temperature mode
+	POWER_DOWN_MODE				///< Heater off mode
 }Mode;
 
-const uint8_t turboButtonAntiGlitchCounterThreshold = 10;	/// Turbo button anti-glitch delay, x10ms
-const uint8_t positionSensorAntiGlitchCounterThreshold = 10;/// Position sensor anti-glitch delay, x10ms
-const uint16_t sleepModeThreshold = 30000;					/// Sleep mode delay, x10ms
-const uint16_t powerDownModeThreshold = 60000;				/// Power down mode delay, x10ms
+/**
+ * Set of the possible turbo button states
+ */
+typedef enum{
+	TURBO_BUTTON_RELEASED,		///< Turbo button released (state)
+	TURBO_BUTTON_JUST_PRESSED,	///< Turbo button just pressed (event)
+	TURBO_BUTTON_PRESSED,		///< Turbo button pressed (state)
+	TURBO_BUTTON_JUST_RELEASED	///< Turbo button just released (event)
+}TurboButtonState;
 
-Mode mode = NORMAL_MODE;					/// Current mode
-uint8_t turboButtonAntiGlitchCounter = 0;	/// Turbo button anti-glitch program timer counter
-uint8_t positionSensorState = 0;			/// Last position sensor state
-uint8_t positionSensorAntiGlitchCounter = 0;/// Position sensor anti-glitch program timer counter
-uint16_t sleepModeCounter = 0;				/// Sleep / power down mode program timer counter
+Mode mode = NORMAL_MODE;		///< Current mode
+uint16_t sleepModeCounter = 0;	///< Sleep / power down mode program timer counter
 
 /**
  * Switches the system to the normal mode: connects corresponding temperature control potentiometer
  * pins to the upper (hot) and lower (cold) sides, disables the output key control blocking and
  * resets the sleep mode counter
  */
-inline void goToNormalMode(){
+static inline void goToNormalMode(){
 	PORTB |= (1 << PORTB4);
 	PORTB &= ~((1 << PORTB2) | (1 << PORTB3));
 	mode = NORMAL_MODE;
@@ -54,7 +61,7 @@ inline void goToNormalMode(){
  * Switches the system to the turbo mode: connects temperature control potentiometer pins to the
  * upper (hot) side, disables the output key control blocking and resets the sleep mode counter
  */
-inline void goToTurboMode(){
+static inline void goToTurboMode(){
 	PORTB |= (1 << PORTB3) | (1 << PORTB4);
 	PORTB &= ~(1 << PORTB2);
 	mode = TURBO_MODE;
@@ -65,7 +72,7 @@ inline void goToTurboMode(){
  * Switches the system to the sleep mode: connects temperature control potentiometer pins to the
  * lower (cold) side and disables the output key control blocking
  */
-inline void goToSleepMode(){
+static inline void goToSleepMode(){
 	PORTB &= ~((1 << PORTB2) | (1 << PORTB3) | (1 << PORTB4));
 	mode = SLEEP_MODE;
 }
@@ -73,40 +80,70 @@ inline void goToSleepMode(){
 /**
  * Switches the system to the power down mode: enables the output key control blocking
  */
-inline void goToPowerDownMode(){
+static inline void goToPowerDownMode(){
 	PORTB |= (1 << PORTB2);
 	mode = POWER_DOWN_MODE;
 }
 
 /**
- * Resets sleep mode counter and switches the system to the normal mode if it was in the sleep mode.
- * Has no effect if the system is in the power down mode.
+ * Returns turbo button state
+ * @return	Turbo button state
+ * @note	The reaction to the turbo button state change does not occur immediately due to the
+ * 			anti-glitch algorithm based on an incremental / decremental software counter that
+ * 			checks the instantaneous button state every 10 ms. The threshold value of the counter
+ * 			can be set by the TURBO_BUTTON_ANTI_GLITCH_COUNTER_THRESHOLD constant (x10ms).
  */
-inline void resetSleepModeCounter(){
-	if(mode != POWER_DOWN_MODE){
-		sleepModeCounter = 0;
-		if(mode == SLEEP_MODE){
-			goToNormalMode();
+static inline TurboButtonState getTurboButtonState(){
+	static TurboButtonState previousState = TURBO_BUTTON_RELEASED;	// Consider that button is released after the power up
+	static uint8_t antiGlitchCounter = 0;
+	if((PINB & (1 << PINB1)) == 0){					// Button is pressed at moment
+		if(antiGlitchCounter < TURBO_BUTTON_ANTI_GLITCH_COUNTER_THRESHOLD){
+			if((++antiGlitchCounter == TURBO_BUTTON_ANTI_GLITCH_COUNTER_THRESHOLD) &&
+					(previousState == TURBO_BUTTON_RELEASED)){
+				previousState = TURBO_BUTTON_PRESSED;
+				return TURBO_BUTTON_JUST_PRESSED;	// Button pressing detected
+			}
+		}
+	}else{											// Button is released at moment
+		if(antiGlitchCounter > 0){
+			if((--antiGlitchCounter == 0) && (previousState == TURBO_BUTTON_PRESSED)){
+				previousState = TURBO_BUTTON_RELEASED;
+				return TURBO_BUTTON_JUST_RELEASED;	// Button releasing detected
+			}
 		}
 	}
+	return previousState;
 }
 
 /**
- * Gets the turbo button state
- * @retval 0 if button is released
- * @retval 1 if button is pressed
+ * Returns position sensor change status
+ * @retval	0 if the sensor has not detected a position change
+ * @retval	1 if the sensor has detected a position change
+ * @note	The reaction to the sensor state change does not occur immediately due to the
+ * 			anti-glitch algorithm based on an incremental / decremental software counter that
+ * 			checks the instantaneous sensor state every 10 ms. The threshold value of the counter
+ * 			can be set by the POSITION_SENSOR_ANTI_GLITCH_COUNTER_THRESHOLD constant (x10ms).
  */
-inline uint8_t isTurboButtonPressed(){
-	return ((PINB & (1 << PINB1)) == 0) ? 1 : 0;
-}
-
-/**
- * Gets the position sensor state
- * @retval 0 if position sensor is open
- * @retval 1 if position sensor is closed
- */
-inline uint8_t isPositionSensorClosed(){
-	return ((PINB & (1 << PINB0)) == 0) ? 1 : 0;
+static inline uint8_t getPositionSensorChangeStatus(){
+	static uint8_t previousState = 1;	// Consider that sensor contact is open after the power up
+	static uint8_t antiGlitchCounter = 0;
+	if((PINB & (1 << PINB0)) == 0){		// Sensor contact is closed at moment
+		if(antiGlitchCounter < POSITION_SENSOR_ANTI_GLITCH_COUNTER_THRESHOLD){
+			if((++antiGlitchCounter == POSITION_SENSOR_ANTI_GLITCH_COUNTER_THRESHOLD) &&
+					(previousState != 0)){
+				previousState = 0;
+				return 1;				// Sensor contact closing detected
+			}
+		}
+	}else{								// Sensor contact is open at moment
+		if(antiGlitchCounter > 0){
+			if((--antiGlitchCounter == 0) && (previousState == 0)){
+				previousState = 1;
+				return 1;				// Sensor contact opening detected
+			}
+		}
+	}
+	return 0;							// No sensor contact state change detected
 }
 
 /**
@@ -123,7 +160,7 @@ inline uint8_t isPositionSensorClosed(){
  * - Sleep mode: Idle
  * - Interrupts: enabled
  */
-inline void peripheralInitialization(){
+static inline void peripheralInitialization(){
 	// GPIO initialization
 	DDRB &= ~((1 << DDB0) | (1 << DDB1));
 	DDRB |= (1 << DDB2) | (1 << DDB3) | (1 << DDB4);
@@ -156,63 +193,38 @@ int main(void){
 		// The cycle starts every ~10ms by the timer interrupts, the rest of the time MCU is in
 		// the sleep mode
 		sleep_mode();
-		if(isTurboButtonPressed()){
-			// Switches to the turbo mode if turbo mode button was pressed throughout the turbo
-			// button anti-glitch cycle
-			if(turboButtonAntiGlitchCounter < turboButtonAntiGlitchCounterThreshold){
-				if((++turboButtonAntiGlitchCounter == turboButtonAntiGlitchCounterThreshold) &&
-						(mode != TURBO_MODE)){
-					goToTurboMode();
-					continue;
+		switch(getTurboButtonState()){
+		case TURBO_BUTTON_JUST_PRESSED:
+			goToTurboMode();				// If turbo button just was pressed - go to turbo mode
+			break;
+		case TURBO_BUTTON_JUST_RELEASED:
+			goToNormalMode();				// If turbo button just was released - go to normal mode
+			break;
+		default:
+			if(getPositionSensorChangeStatus()){
+				if(mode != POWER_DOWN_MODE){// If position sensor has detected a position change reset
+					sleepModeCounter = 0;	// sleep mode counter (except the power down mode)
+					if(mode == SLEEP_MODE){
+						goToNormalMode();
+					}
+				}
+			}else{							// Handle the sleep mode counter
+				if(sleepModeCounter < POWER_DOWN_MODE_THRESHOLD){
+					if(++sleepModeCounter == SLEEP_MODE_THRESHOLD){
+						goToSleepMode();
+					}else if(sleepModeCounter == POWER_DOWN_MODE_THRESHOLD){
+						goToPowerDownMode();
+					}
 				}
 			}
-		}else{
-			// Switches to the normal mode if turbo mode button was released throughout the turbo
-			// button anti-glitch cycle
-			if(turboButtonAntiGlitchCounter > 0){
-				if((--turboButtonAntiGlitchCounter == 0) && (mode == TURBO_MODE)){
-					goToNormalMode();
-					continue;
-				}
-			}
-		}
-		// Resets the sleep mode counter if position sensor changed its state and maintained it
-		// throughout the position sensor anti-glitch cycle and current mode is not a power down
-		if(isPositionSensorClosed()){
-			if(positionSensorAntiGlitchCounter < positionSensorAntiGlitchCounterThreshold){
-				if((++positionSensorAntiGlitchCounter == positionSensorAntiGlitchCounterThreshold) &&
-						(positionSensorState == 0)){
-					positionSensorState = 1;
-					resetSleepModeCounter();
-					continue;
-				}
-			}
-		}else{
-			if(positionSensorAntiGlitchCounter > 0){
-				if((--positionSensorAntiGlitchCounter == 0) && (positionSensorState == 1)){
-					positionSensorState = 0;
-					resetSleepModeCounter();
-					continue;
-				}
-			}
-		}
-		// If there were no changes in the turbo button and position sensor states, increases the
-		// sleep mode counter and switches to the appropriate mode if the corresponding threshold
-		// has been reached
-		if(sleepModeCounter < powerDownModeThreshold){
-			++sleepModeCounter;
-			if(sleepModeCounter == sleepModeThreshold){
-				goToSleepMode();
-			}else if(sleepModeCounter == powerDownModeThreshold){
-				goToPowerDownMode();
-			}
+			break;
 		}
 	}
 	return 0;
 }
 
 /**
- * Trap for the handlerless interrupts
+ * A trap for the handlerless interrupts
  * @note 	Since the only one interrupt for MCU wake up only is used in the project, a separate
  * 			timer interrupt handler was not implemented
  */
