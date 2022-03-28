@@ -24,8 +24,8 @@
 #define OUTPUT_BLOCK_PIN			(1 << PB0)	///< Pseudo open-drain output blocking the iron power (active low)
 #define VIBRATION_SENSOR_PIN		(1 << PB1)	///< Digital input for the movement sensor (triggers by the level change)
 #define TURBO_BUTTON_PIN			(1 << PB2)	///< Digital input for the turbo button (active low)
-#define LOW_SIDE_REGULATOR_PIN		(1 << PB3)	///< Digital output for the low side regulator pin (low - normal, high - turbo mode)
-#define HIGH_SIDE_REGULATOR_PIN		(1 << PB4)	///< Digital output for the high side regulator pin (high - normal, high - sleep mode)
+#define HIGH_SIDE_REGULATOR_PIN		(1 << PB3)	///< Digital output for the high side regulator pin (high - normal, high - sleep mode)
+#define LOW_SIDE_REGULATOR_PIN		(1 << PB4)	///< Digital output for the low side regulator pin (low - normal, high - turbo mode)
 
 /// Digital pin state aliases
 typedef enum{

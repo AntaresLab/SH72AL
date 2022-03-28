@@ -6,7 +6,7 @@ PCB project and other more complete information can be found [here](https://oshw
 
 At the moment, the board and MCU firmware have been developed, but not tested yet.
 
-Pay attention that the first commits were made for another PCB. Last commits are applicable for the ver.1 rev.B PCB.
+Pay attention that the first commits were made for another PCB. Last commits are applicable for the ver.1 rev.C PCB.
 
 
 
