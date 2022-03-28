@@ -1,5 +1,9 @@
 *
+!*/
 !.gitignore
 !LICENSE
 !README.md
-!main.c
+!*.c
+!*.project
+!*.cproject
+/Debug/
