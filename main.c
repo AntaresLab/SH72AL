@@ -1,13 +1,17 @@
 /*
  * @file	main.c
  * @author	<a href="https://github.com/AntaresLab">Sergey Starovoitov aka AntaresLab</a>
- * @version	0.3
- * @date	28-March-2022
+ * @version	1.0
+ * @date	02-April-2022
  *
  * There is a firmware for the <a href="https://oshwlab.com/AntaresLab/sh72al1">alternative SH72 soldering iron controller</a>
  * with turbo mode, two-stage sleep mode, grounding the soldering iron tip to a "-" power wire and the protection against
  * the reverse polarity, short circuit and overvoltage. The firmware is designed for the ATtini13(A) MCU and works with the
  * factory-setted fuse bits.
+ *
+ * @warning Due to the low clock speed setting, after flashing the MCU programmer stops to communicate it. To return the ability
+ * to program the MCU, reset pin should be shorted to GND before powering the board (MCU shouldn't be started before switching
+ * MCU to the program mode). Thanks to Ignacio Vazquez-Abrams from electronics.stackexchange.com :)
  */
 
 #include <avr/io.h>
@@ -18,8 +22,8 @@
 
 #define MAIN_CYCLE_FREQUENCY		100			///< Main cycle start frequency
 
-#define SLEEP_MODE_THRESHOLD		130			///< Sleep mode delay, seconds
-#define POWER_DOWN_MODE_THRESHOLD	180			///< Power down mode delay (from normal mode), seconds
+#define SLEEP_MODE_THRESHOLD		180			///< Sleep mode delay, seconds
+#define POWER_DOWN_MODE_THRESHOLD	300			///< Power down mode delay (from normal mode), seconds
 
 #define OUTPUT_BLOCK_PIN			(1 << PB0)	///< Pseudo open-drain output blocking the iron power (active low)
 #define VIBRATION_SENSOR_PIN		(1 << PB1)	///< Digital input for the movement sensor (triggers by the level change)
